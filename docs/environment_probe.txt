@@ -1,0 +1,19 @@
+# Environment lock (generated)
+
+- host: `nyx` (Linux 4.18.0-553.158.1.el8_10.x86_64)
+- python: `3.11.17` (`/home/dforero/miniconda3/envs/webjax/bin/python`)
+- jax: `0.10.2`
+- jaxlib: `0.10.2`
+- jax.lib.xla_extension version: `None`
+- numpy: `2.4.6`
+- jax backend: `cpu`
+- devices: ['cpu:0']
+- jztree: version=`None` file=`None` error=ImportError: Installed jztree backend is CUDA 12, but JAX appears to use CUDA 13. Please install jztree-cu13.
+- nvcc: `/usr/local/cuda/bin/nvcc` release `V12.3.107`
+- nvidia-smi: `None`
+- SLURM gpu partition: `gn05 gpu:l40s:1 drain
+gn04 gpu:a40:3 mix
+gn01 gpu:l40s:3 idle
+gn02 gpu:a30:2,gpu:a40:1 idle
+gn03 gpu:h100:1 idle`
+- CUDA_VISIBLE_DEVICES: `None`

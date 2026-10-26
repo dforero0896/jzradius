@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jzradius"
+version = "0.0.1"
+description = "Differentiable periodic two-point pair counting on GPU via Morton-tree radius traversal"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "jax>=0.8.0",
+    "numpy>=2.2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "scipy",
+]
+cuda12 = ["jztree[cuda12]"]
+cuda13 = ["jztree[cuda13]"]
+
+[tool.setuptools]
+packages = ["jzradius"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --maxfail=3"
+markers = [
+    "smoke: tiny fast sanity checks (N<=32, budget 60s)",
+    "unit: CPU-correctness tests (N<=256, budget 300s)",
+    "integration: end-to-end tests vs reference (N<=20000, budget 900s)",
+    "slow: opt-in performance test",
+    "gpu: requires a CUDA GPU",
+]
+filterwarnings = [
+    "error::RuntimeWarning",
+]

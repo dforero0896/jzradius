@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+jzradius/_libs/*.so
+.venv/
+
+# Agent/planning internals (kept out of the public repo)
+PLAN.md
+STATUS.md
+budget.json
+budget_ledger.jsonl
