@@ -12,7 +12,7 @@ weights), using a dual-tree traversal instead of an O(N²) pair list.
 Pre-alpha. The full stack exists: periodic bounds, tree adapter, exact
 dual-tree traversal, CUDA forward/backward kernels, typed XLA-FFI host
 launchers, build integration and the `custom_vjp` wrapper. The kernels run on
-device: the complete suite (239 passed) passes on one A30, including forward
+device: the complete suite (293 passed, 1 skipped) passes on one A30, including forward
 parity with the brute-force oracle and position/weight gradients matched
 against `jax.grad(reference_histogram)` for self and cross correlation. Known
 gaps are performance (the tree build is host-side, D012) and the eager-only
@@ -59,9 +59,9 @@ not supported in v1 (D008); the gradient itself is the analytic kernel VJP.
 
 ```bash
 python scripts/build_ext.py            # CPU mirror (+ CUDA when nvcc exists)
-JAX_PLATFORMS=cpu .venv/bin/python -m pytest tests/ -q   # 237 passed, 3 skipped
+JAX_PLATFORMS=cpu .venv/bin/python -m pytest tests/ -q   # 303 passed, 4 skipped
 # on a GPU node (both platforms registered: some tests use jax.io_callback)
-JAX_PLATFORMS=cuda,cpu .venv/bin/python -m pytest tests/ -q   # 239 passed
+JAX_PLATFORMS=cuda,cpu .venv/bin/python -m pytest tests/ -q   # 293 passed
 ```
 
 Tiered runners (`scripts/run_smoke.py`, `run_unit.py`, `run_integration.py`)

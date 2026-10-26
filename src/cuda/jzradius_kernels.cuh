@@ -25,8 +25,10 @@
 
 #ifdef __CUDACC__
 #define JZ_HD __host__ __device__
+#define JZ_HOST __host__
 #else
 #define JZ_HD
+#define JZ_HOST
 #endif
 
 namespace jzradius {

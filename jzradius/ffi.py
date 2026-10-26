@@ -45,6 +45,7 @@ _TARGETS = {
     "backward": "jzradius_backward",
     "node_bounds": "jzradius_node_bounds",
     "work_items": "jzradius_work_items",
+    "traverse": "jzradius_traverse",
 }
 _SYMBOLS = {
     "cpu": {
@@ -52,12 +53,14 @@ _SYMBOLS = {
         "backward": "JzRadiusBackwardCpu",
         "node_bounds": "JzRadiusNodeBoundsCpu",
         "work_items": "JzRadiusWorkCpu",
+        "traverse": "JzRadiusTraverseCpu",
     },
     "CUDA": {
         "forward": "JzRadiusForward",
         "backward": "JzRadiusBackward",
         "node_bounds": "JzRadiusNodeBounds",
         "work_items": "JzRadiusWork",
+        "traverse": "JzRadiusTraverse",
     },
 }
 
@@ -314,3 +317,60 @@ def work_items(
         boxsize=np.float64(boxsize),
     )
     return tuple(result)
+
+
+def traverse(
+    n2n,
+    n2n_ispl,
+    n2l,
+    n2l_ispl,
+    pos,
+    *,
+    work_cap: int,
+    self_query: bool,
+    unique_pairs: bool,
+    r_max: float,
+    prune_tol: float,
+    boxsize: float,
+    platform: str | None = None,
+):
+    """Single-op dual-tree traversal over jztree's packed planes.
+
+    Drives the whole walk inside one typed-FFI call: the C++ handler loops over
+    the planes, compacts with prefix sums and returns
+
+        work   (work_cap, 4) int32  interaction list, sentinel padded tail
+        counts (3,) int32           [n_work, overflow, host level reads]
+
+    No Python loop and no per-level device read is involved; the returned
+    ``counts`` are the only host-visible scalars.
+    """
+    platform = platform or active_platform()
+    _load(platform)
+    if n2n.dtype != jnp.int32 or n2n_ispl.dtype != jnp.int32:
+        raise JzRadiusError("n2n planes must be int32")
+    if n2l.dtype != jnp.int32 or n2l_ispl.dtype != jnp.int32:
+        raise JzRadiusError("n2l planes must be int32")
+    if work_cap <= 0:
+        raise JzRadiusError("work_cap must be positive")
+    result = jax.ffi.ffi_call(
+        _TARGETS["traverse"],
+        (
+            jax.ShapeDtypeStruct((work_cap, 4), jnp.int32),
+            jax.ShapeDtypeStruct((3,), jnp.int32),
+        ),
+        vmap_method="sequential",
+    )(
+        n2n,
+        n2n_ispl,
+        n2l,
+        n2l_ispl,
+        pos,
+        self_query=np.int32(1 if self_query else 0),
+        unique_pairs=np.int32(1 if unique_pairs else 0),
+        r_max=np.float64(r_max),
+        prune_tol=np.float64(prune_tol),
+        boxsize=np.float64(boxsize),
+    )
+    work, counts = result
+    return work, counts

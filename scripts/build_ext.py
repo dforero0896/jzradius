@@ -30,12 +30,20 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 OUT = ROOT / "jzradius" / "_libs"
 
-CPU_SOURCES = [SRC / "cpu" / "jzradius_cpu.cpp"]
-CUDA_SOURCES = [SRC / "cuda" / "jzradius_cuda.cu"]
+CPU_SOURCES = [
+    SRC / "cpu" / "jzradius_cpu.cpp",
+    SRC / "cpu" / "jzradius_traverse_cpu.cpp",
+]
+CUDA_SOURCES = [
+    SRC / "cuda" / "jzradius_cuda.cu",
+    SRC / "cuda" / "jzradius_traverse.cu",
+]
 HEADERS = [
     SRC / "cuda" / "jzradius_kernels.cuh",
     SRC / "cuda" / "jzradius_cuda.cu",
+    SRC / "cuda" / "jzradius_traverse.cu",
     SRC / "cpu" / "jzradius_cpu.cpp",
+    SRC / "cpu" / "jzradius_traverse_cpu.cpp",
 ]
 
 # GPU architectures the cluster provides (A30/A40 sm_86, L40S sm_89, H100 sm_90).

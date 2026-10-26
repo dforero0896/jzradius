@@ -80,6 +80,9 @@ __global__ void forward_kernel_bins(const T* __restrict__ qpos,
                                     const int32_t* __restrict__ orig, Params p,
                                     T* __restrict__ hist) {
   const WorkItem item = work[blockIdx.x];
+  // Sentinel rows pad the interaction list to the static capacity; the
+  // traversal writes them (see jzradius_traverse.cu).
+  if (item.q0 < 0) return;
   for (int64_t i = item.q0 + threadIdx.x; i < item.q1; i += blockDim.x) {
     const T* qi = qpos + 3 * i;
     const double a_i = static_cast<double>(wq[i]);
@@ -121,6 +124,9 @@ __global__ void backward_kernel(const T* __restrict__ qpos,
                                 T* __restrict__ gpos_s,
                                 T* __restrict__ gwq, T* __restrict__ gws) {
   const WorkItem item = work[blockIdx.x];
+  // Sentinel rows pad the interaction list to the static capacity; the
+  // traversal writes them (see jzradius_traverse.cu).
+  if (item.q0 < 0) return;
   for (int64_t i = item.q0 + threadIdx.x; i < item.q1; i += blockDim.x) {
     const T* qi = qpos + 3 * i;
     const double wq_i = static_cast<double>(wq[i]);

@@ -67,6 +67,7 @@ void forward_cpu(const T* qpos, const T* spos, const double* centers,
   (void)n_pairs_expected;
   for (int32_t w = 0; w < p.n_work; ++w) {
     const WorkItem item = work[w];
+    if (item.q0 < 0) continue;  // sentinel tail row (padded capacity)
     for (int64_t i = item.q0; i < item.q1; ++i) {
       const T* qi = qpos + 3 * i;
       const double wq_i = static_cast<double>(wq[i]);
@@ -102,6 +103,7 @@ void backward_cpu(const T* qpos, const T* spos, const double* centers,
                   T* gpos_q, T* gpos_s, T* gwq, T* gws) {
   for (int32_t w = 0; w < p.n_work; ++w) {
     const WorkItem item = work[w];
+    if (item.q0 < 0) continue;  // sentinel tail row (padded capacity)
     for (int64_t i = item.q0; i < item.q1; ++i) {
       const T* qi = qpos + 3 * i;
       const double wq_i = static_cast<double>(wq[i]);

@@ -33,8 +33,12 @@ from .config import (
     validate_bin_centers,
     validate_config,
 )
-from .errors import JzRadiusError, RadiusConfigError
-from .tree_adapter import RadiusTree, build_naive_radius_tree, build_radius_tree_from_jztree
+from .errors import JzRadiusError, RadiusConfigError, WorkQueueOverflow
+from .tree_adapter import (
+    RadiusTree,
+    build_naive_radius_tree,
+    build_radius_tree_from_jztree,
+)
 from .traversal import build_work_items
 from .work_queue import build_work_items_device
 
@@ -154,6 +158,49 @@ def _build_jztree_trees(pos_query, pos_source, boxsize, leaf_size):
     if tree_s is None:
         tree_s = one_or_scaffold(pos_source)
     return tree_q, tree_s, pos_source is pos_query
+
+
+def jztree_planes(pos, *, leaf_size: int):
+    """Morton sort + a balanced jztree hierarchy, entirely on the device.
+
+    Returns ``(posz, idz, hierarchy)``.  The depth comes from jztree's own
+    configuration (``coarse_fac=4``, ``stop_coarsen=1``) so the packed planes
+    are already a balanced multi-level tree: no host-side re-balancing pass is
+    needed (this replaces the ``add_balancing_levels`` host fix of D014).  The
+    allocation factor is retried because jztree's node-count estimate can come
+    up short on irregular inputs (D011).
+    """
+    import os
+
+    os.environ.setdefault("JZTREE_SKIP_JAX_CUDA_CHECK", "1")
+    from jztree.tree import TreeConfig, build_tree_hierarchy, zsort
+
+    posz, idz = zsort(pos)
+    last_error = None
+    for fac in (2.0, 4.0, 1.0):
+        try:
+            th = build_tree_hierarchy(
+                posz,
+                TreeConfig(
+                    max_leaf_size=int(leaf_size),
+                    coarse_fac=4.0,
+                    stop_coarsen=1,
+                    alloc_fac_nodes=fac,
+                ),
+            )
+            return posz, idz.astype(jnp.int32), th
+        except RuntimeError as exc:  # allocation too small: retry larger
+            last_error = exc
+    raise JzRadiusError(f"jztree hierarchy build failed: {last_error}")
+
+
+def _try_planes(pos, *, leaf_size: int):
+    """Plane hierarchy for the production device path, or ``None`` to fall back."""
+    try:
+        return jztree_planes(pos, leaf_size=leaf_size)
+    except Exception:
+        _TREE_FALLBACKS.append(1)
+        return None
 
 
 def _prepare_centers_and_rmax(pos_np, centers, r_max, temperature, boxsize):
@@ -378,43 +425,90 @@ def _hist_core_fwd(
     )
     validate_config(cfg)
 
-    tree_q, tree_s, derived_self = build_radius_trees(
-        q_np, None if self_query else s_np, boxsize=float(boxsize),
-        leaf_size=int(leaf_size),
-    )
-    if derived_self != bool(self_query):
-        raise JzRadiusError("internal error: tree self-query mismatch")
-
     # Only `unique` enumerates unordered pairs once; `directed_half` walks all
     # ordered i != j pairs and halves the contribution (PLAN.md 6.5).
     triangular = pair_convention == "unique"
-    # On the GPU the descent runs as device kernels (D012/D013); the CPU path
-    # keeps the interpreted descent, which is what the tests cross-check.
-    if jax.default_backend() == "gpu":
-        work = build_work_items_device(
-            tree_q,
-            tree_s,
-            r_max=float(r_max),
-            boxsize=float(boxsize),
-            max_work_items=int(max_work_items),
-            unique_pairs=triangular,
-        )
-    else:
-        work = build_work_items(
-            tree_q,
-            tree_s,
-            r_max=float(r_max),
-            boxsize=float(boxsize),
-            max_work_items=int(max_work_items),
-            unique_pairs=triangular,
-        )
-    work_j = jnp.asarray(work, dtype=jnp.int32)
-    n_work = int(work_j.shape[0])
     centers_j = jnp.asarray(centers_np, dtype=jnp.float64)
-
     eps = 1e-30 if q_np.dtype == np.float32 else 1e-60
     r_safe_val = _r_safe(float(boxsize), np.dtype(q_np.dtype).name)
     pair_scale = 0.5 if pair_convention == "directed_half" else 1.0
+
+    # Production path on the GPU: one device op walks the packed planes and
+    # returns the interaction list (PLAN_ADDENDUM Rev 3, G1/G2/G5).  There is
+    # no Python level loop here and no device data touches the host: the walk,
+    # its scan compaction and the box pass all run in kernels.
+    planes = None
+    if jax.default_backend() == "gpu" and self_query:
+        planes = _try_planes(pos_q, leaf_size=int(leaf_size))
+
+    if planes is not None:
+        posz, idz, th = planes
+        nlevels = int(th.ispl_n2n.ispl.shape[0]) - 1
+        n_nodes = int(th.ispl_n2n.data.shape[0]) - nlevels
+        work_cap = min(max(1024, 16 * n_nodes), int(max_work_items))
+        prune_tol = (
+            8.0 * np.finfo(np.float64).eps * float(boxsize) if boxsize > 0 else 0.0
+        )
+        work_j, counts = ffi.traverse(
+            th.ispl_n2n.data,
+            th.ispl_n2n.ispl,
+            th.ispl_n2l.data,
+            th.ispl_n2l.ispl,
+            posz,
+            work_cap=work_cap,
+            self_query=True,
+            unique_pairs=triangular,
+            r_max=float(r_max),
+            prune_tol=prune_tol,
+            boxsize=float(boxsize),
+        )
+        if int(np.asarray(counts)[1]):
+            raise WorkQueueOverflow(
+                "device traversal interaction list overflowed "
+                f"max_work_items={int(max_work_items)}"
+            )
+        perm_q = idz
+        perm_s = idz
+        q_sorted = posz
+        s_sorted = posz
+        wq_sorted = jnp.take(wq, perm_q, axis=0)
+        ws_sorted = jnp.take(ws, perm_s, axis=0)
+        n_work = work_cap
+    else:
+        tree_q, tree_s, derived_self = build_radius_trees(
+            q_np, None if self_query else s_np, boxsize=float(boxsize),
+            leaf_size=int(leaf_size),
+        )
+        if derived_self != bool(self_query):
+            raise JzRadiusError("internal error: tree self-query mismatch")
+        # Device-side level-by-level queue on GPU (D013); the interpreted
+        # descent stays on CPU, where the tests cross-check it.
+        if jax.default_backend() == "gpu":
+            work = build_work_items_device(
+                tree_q,
+                tree_s,
+                r_max=float(r_max),
+                boxsize=float(boxsize),
+                max_work_items=int(max_work_items),
+                unique_pairs=triangular,
+            )
+        else:
+            work = build_work_items(
+                tree_q,
+                tree_s,
+                r_max=float(r_max),
+                boxsize=float(boxsize),
+                max_work_items=int(max_work_items),
+                unique_pairs=triangular,
+            )
+        work_j = jnp.asarray(work, dtype=jnp.int32)
+        n_work = int(work_j.shape[0])
+        perm_q = jnp.asarray(tree_q.sorted_to_orig, dtype=jnp.int32)
+        perm_s = jnp.asarray(tree_s.sorted_to_orig, dtype=jnp.int32)
+        q_sorted = jnp.take(pos_q, perm_q, axis=0)
+        s_sorted = jnp.take(pos_s, perm_s, axis=0)
+        wq_sorted = jnp.take(wq, perm_q, axis=0)
+        ws_sorted = jnp.take(ws, perm_s, axis=0)
     params = ffi.build_params(
         n_q=int(q_np.shape[0]),
         n_s=int(s_np.shape[0]),
@@ -430,13 +524,6 @@ def _hist_core_fwd(
         r_safe=r_safe_val,
         pair_scale=pair_scale,
     )
-
-    perm_q = jnp.asarray(tree_q.sorted_to_orig, dtype=jnp.int32)
-    perm_s = jnp.asarray(tree_s.sorted_to_orig, dtype=jnp.int32)
-    q_sorted = jnp.take(pos_q, perm_q, axis=0)
-    s_sorted = jnp.take(pos_s, perm_s, axis=0)
-    wq_sorted = jnp.take(wq, perm_q, axis=0)
-    ws_sorted = jnp.take(ws, perm_s, axis=0)
 
     # `perm_q` orients unordered self-pairs by *input* index inside the
     # kernel (PLAN.md 6.5 / D010); it is unused for cross-correlation.

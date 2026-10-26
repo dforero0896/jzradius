@@ -13,3 +13,10 @@ PLAN_ADDENDUM.md
 STATUS.md
 budget.json
 budget_ledger.jsonl
+
+# Node-local GPU runner log (written on compute nodes)
+gpulog.txt
+
+# Work-in-progress shared-memory kernel draft (not built; see docs/m9-handoff.md)
+src/cuda/*_shared.cu
+src/cuda/*_shared.cuh

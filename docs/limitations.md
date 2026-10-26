@@ -117,13 +117,13 @@ traversal and kernels) but slower to build. See D011.
 
 - CPU mirror of the shared arithmetic: compiled (`libjzradius_cpu.so`) and
   exercised through the **same typed-FFI/custom_vjp path** as the GPU build;
-  237 passed, 3 skipped (skips: the GPU-only jztree adapter test, the
+  303 passed, 4 skipped (skips: the two `@pytest.mark.gpu` tests, the
   jztree-dependent FFI test when jztree is not on `PYTHONPATH`, and the optional
-  pyfcfc cross-check; all three clear on a GPU node / with pyfcfc).
+  pyfcfc cross-check; on a GPU node only the pyfcfc skip remains).
 - CUDA: `nvcc` 12.3 builds `libjzradius_cuda.so` for `sm_80/86/89/90` and
   exports `JzRadiusForward`, `JzRadiusBackward`, `JzRadiusNodeBounds`.
 - CUDA **runtime**: exercised on one A30 (driver 610.57.04). The complete suite
-  passes on the device -- 239 passed in ~190 s with `JAX_PLATFORMS=cuda,cpu` --
+  passes on the device -- 293 passed, 1 skipped in ~4 min with `JAX_PLATFORMS=cuda,cpu` --
   including forward parity against `reference_histogram` for f32/f64,
   softmax/Gaussian, and position/weight gradients against
   `jax.grad(reference_histogram)` for self and cross correlation.

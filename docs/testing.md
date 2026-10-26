@@ -21,12 +21,12 @@ env PYTHONPATH="$PWD:$V:$W" JAX_PLATFORMS=cpu .venv/bin/python -S scripts/run_un
 env PYTHONPATH="$PWD:$V:$W" JAX_PLATFORMS=cpu .venv/bin/python -S scripts/run_smoke.py
 ```
 
-Current totals: 237 passed, 3 skipped on CPU, and 239 passed, 0 skipped on a
-GPU (one A30, ~190 s). The CPU skips are the `@pytest.mark.gpu` jztree adapter
-test, the jztree-dependent FFI test when `jztree` is not on `PYTHONPATH`, and
-`tests/test_external_pyfcfc.py`, which needs the optional pyfcfc build (see
-`docs/examples.md`); all of them clear on a GPU node or with those two
-dependencies present. The GPU run needs both platforms registered:
+Current totals: 303 passed, 4 skipped on CPU, and 293 passed, 1 skipped on a
+GPU (one A30, ~4 min). The CPU skips are the two `@pytest.mark.gpu` tests
+(jztree adapter, device work queue on CUDA), the jztree-dependent FFI test when
+`jztree` is not on `PYTHONPATH`, and `tests/test_external_pyfcfc.py`, which needs
+the optional pyfcfc build (see `docs/examples.md`); on a GPU node with jztree
+importable only the optional pyfcfc check remains. The GPU run needs both platforms registered:
 
 ```bash
 srun -p gpu --gres=gpu:1 -n1 -t 0:20:00 /bin/bash -c '
@@ -80,6 +80,10 @@ Clustered data is mandatory for pruning tests (PLAN §18.4).
 | `test_pair_set_equivalence.py` | **exact pair set** vs brute force: N ∈ {2,3,17,64,257}, 3 distributions, L ∈ {1,100}, all seeds, `unique`/`directed_half`/cross, weighted/unweighted histograms |
 | `test_ffi_forward.py` | typed-FFI forward through the real `custom_vjp` API vs `reference_histogram`: softmax/Gaussian, f32/f64, L ∈ {1,100}, 3 distributions; raw kernel vs CPU traversal; `directed_half == unique`; empty interaction list; GPU smoke (gated) |
 | `test_ffi_backward.py` | typed-FFI backward vs `jax.grad(reference_histogram)`: positions and weights, self and cross correlation, f32/f64, `grad_wq`/`grad_ws` independence, unused-weight zero, explicit `jit`-unsupported error |
+| `test_device_workitems.py` | device dual-tree work queue (D013) vs the host descent: leaf-rectangle set equality over N, seeds, `r_max`, `unique_pairs`, cross correlation, `WorkQueueOverflow`, no-pair case, typed/contiguous node arrays, GPU-gated CUDA run |
+| `test_traverse_planes.py` | single `jzradius_traverse` op driven by synthetic packed planes (no `jztree` needed): histogram vs `reference_histogram` for softmax/Gaussian, `directed_half == unique`, `-1` padding of the tail, determinism, overflow flag, empty result, malformed `ispl` rejected |
+| `test_integration.py` | PLAN §18.1 integration tier: N=1000/4000 vs `traverse_tree_pairs` and brute force; marked `integration` + `gpu` |
+| `test_external_pyfcfc.py` | optional cross-check against pyfcfc 0.2.0 (counts and coordinate adjoint), marked `slow`, module-level `importorskip` |
 
 ## Tolerances (PLAN §18.3)
 
