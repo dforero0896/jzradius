@@ -44,17 +44,20 @@ _TARGETS = {
     "forward": "jzradius_forward",
     "backward": "jzradius_backward",
     "node_bounds": "jzradius_node_bounds",
+    "work_items": "jzradius_work_items",
 }
 _SYMBOLS = {
     "cpu": {
         "forward": "JzRadiusForwardCpu",
         "backward": "JzRadiusBackwardCpu",
         "node_bounds": "JzRadiusNodeBoundsCpu",
+        "work_items": "JzRadiusWorkCpu",
     },
     "CUDA": {
         "forward": "JzRadiusForward",
         "backward": "JzRadiusBackward",
         "node_bounds": "JzRadiusNodeBounds",
+        "work_items": "JzRadiusWork",
     },
 }
 
@@ -248,3 +251,66 @@ def node_bounds(
         vmap_method="sequential",
     )(qlo, qhi, slo, shi, boxsize=np.float64(boxsize))
     return result
+
+
+def work_items(
+    qstart,
+    qcount,
+    qleft,
+    qright,
+    qlo,
+    qhi,
+    sstart,
+    scount,
+    sleft,
+    sright,
+    slo,
+    shi,
+    frontier,
+    *,
+    next_cap: int,
+    work_cap: int,
+    self_query: bool,
+    unique_pairs: bool,
+    r_max: float,
+    prune_tol: float,
+    boxsize: float,
+    platform: str | None = None,
+):
+    """One device-side BFS level of the dual-tree descent.
+
+    Returns ``(next_frontier, work, counts)`` with ``counts = [n_next, n_work,
+    overflow]``.  The caller loops over levels and grows the buffers when
+    ``overflow`` is set (see :mod:`jzradius.work_queue`).
+    """
+    platform = platform or active_platform()
+    _load(platform)
+    result = jax.ffi.ffi_call(
+        _TARGETS["work_items"],
+        (
+            jax.ShapeDtypeStruct((next_cap, 2), jnp.int32),
+            jax.ShapeDtypeStruct((work_cap, 4), jnp.int32),
+            jax.ShapeDtypeStruct((3,), jnp.int32),
+        ),
+        vmap_method="sequential",
+    )(
+        qstart,
+        qcount,
+        qleft,
+        qright,
+        qlo,
+        qhi,
+        sstart,
+        scount,
+        sleft,
+        sright,
+        slo,
+        shi,
+        frontier,
+        self_query=np.int32(1 if self_query else 0),
+        unique_pairs=np.int32(1 if unique_pairs else 0),
+        r_max=np.float64(r_max),
+        prune_tol=np.float64(prune_tol),
+        boxsize=np.float64(boxsize),
+    )
+    return tuple(result)

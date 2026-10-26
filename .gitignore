@@ -9,6 +9,7 @@ jzradius/_libs/*.so
 
 # Agent/planning internals (kept out of the public repo)
 PLAN.md
+PLAN_ADDENDUM.md
 STATUS.md
 budget.json
 budget_ledger.jsonl

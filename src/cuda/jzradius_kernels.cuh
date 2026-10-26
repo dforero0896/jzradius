@@ -202,6 +202,79 @@ JZ_HD inline double box_lower_bound(const double* qlo, const double* qhi,
   return sqrt(r2);
 }
 
+// ---------------------------------------------------------------------------
+// Dual-tree work queue (device-side replacement for the host descent)
+//
+// The host Python descent in `jzradius.traversal.build_work_items` is O(nodes)
+// of interpreted work and dominates every GPU call (D012).  The same descent is
+// expressed here so that it can run one level at a time on the device: each
+// frontier item is pruned, emitted as a leaf pair, or expanded into child pairs.
+// `plan_pair` is the single source of truth for that decision and is shared by
+// the CUDA kernel and the CPU mirror, exactly like the pair arithmetic above.
+// ---------------------------------------------------------------------------
+
+enum PairAction {
+  kPairPrune = 0,      // disjoint within r_max: drop
+  kPairEmit = 1,       // both leaves: emit a work item
+  kPairExpandQ = 2,    // split the query node
+  kPairExpandS = 3,    // split the source node
+  kPairExpandDiag = 4  // self-pair (nq == ns): expand the upper triangle
+};
+
+struct NodeArrays {
+  const int32_t* start;
+  const int32_t* count;
+  const int32_t* left;  // first child id, negative for a leaf
+  const int32_t* right; // one past the last child id
+  const double* lo;     // (n, 3) tight lower corner
+  const double* hi;     // (n, 3) tight upper corner
+};
+
+struct PairPlan {
+  int action;
+  int32_t c0;
+  int32_t c1;
+};
+
+JZ_HD inline bool node_is_leaf(const NodeArrays& n, int32_t i) {
+  return n.left[i] < 0;
+}
+
+JZ_HD inline PairPlan plan_pair(const NodeArrays& q, const NodeArrays& s,
+                                int32_t nq, int32_t ns, double r_max,
+                                double prune_tol, double boxsize,
+                                int32_t self_query) {
+  PairPlan p{kPairPrune, 0, 0};
+  const double lb =
+      box_lower_bound(q.lo + 3 * nq, q.hi + 3 * nq, s.lo + 3 * ns,
+                      s.hi + 3 * ns, boxsize);
+  if (lb > r_max + prune_tol) return p;
+  const bool lq = node_is_leaf(q, nq);
+  const bool ls = node_is_leaf(s, ns);
+  if (lq && ls) {
+    p.action = kPairEmit;
+    return p;
+  }
+  if (self_query && nq == ns) {
+    p.action = kPairExpandDiag;
+    p.c0 = q.left[nq];
+    p.c1 = q.right[nq];
+    return p;
+  }
+  const bool expand_q =
+      (!lq) && (ls || q.count[nq] >= s.count[ns]);
+  if (expand_q) {
+    p.action = kPairExpandQ;
+    p.c0 = q.left[nq];
+    p.c1 = q.right[nq];
+  } else {
+    p.action = kPairExpandS;
+    p.c0 = s.left[ns];
+    p.c1 = s.right[ns];
+  }
+  return p;
+}
+
 }  // namespace jzradius
 
 #endif  // JZRADIUS_KERNELS_CUH_

@@ -413,3 +413,177 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<double>("boxsize")
         .Ret<ffi::AnyBuffer>(),
     {xla::ffi::Traits::kCmdBufferCompatible});
+
+/* ------------------------------ work queue ------------------------------ */
+// One BFS level of the dual-tree descent, entirely on the device (D012/D013).
+// Each thread owns one frontier item; children are appended with atomics.  The
+// caller loops over levels and re-runs a level with larger buffers whenever
+// `counts[2]` (overflow) is set, so nothing is ever silently dropped.
+__global__ void work_items_kernel(jzradius::NodeArrays q, jzradius::NodeArrays s,
+                                  const int32_t* __restrict__ frontier,
+                                  int32_t n_in, int32_t next_cap,
+                                  int32_t work_cap, int32_t self_query,
+                                  int32_t unique_pairs, double r_max,
+                                  double prune_tol, double boxsize,
+                                  int32_t* __restrict__ next_out,
+                                  int32_t* __restrict__ work_out,
+                                  int32_t* __restrict__ counts) {
+  const int32_t stride = blockDim.x * gridDim.x;
+  for (int32_t i = blockIdx.x * blockDim.x + threadIdx.x; i < n_in; i += stride) {
+    const int32_t nq = frontier[2 * i];
+    const int32_t ns = frontier[2 * i + 1];
+    const jzradius::PairPlan p = jzradius::plan_pair(
+        q, s, nq, ns, r_max, prune_tol, boxsize, self_query);
+    if (p.action == jzradius::kPairEmit) {
+      const int32_t idx = atomicAdd(&counts[1], 1);
+      if (idx < work_cap) {
+        int32_t* w = work_out + 4 * idx;
+        w[0] = q.start[nq];
+        w[1] = q.start[nq] + q.count[nq];
+        w[2] = s.start[ns];
+        w[3] = s.start[ns] + s.count[ns];
+      } else {
+        atomicExch(&counts[2], 1);
+      }
+      continue;
+    }
+    if (p.action == jzradius::kPairExpandQ ||
+        p.action == jzradius::kPairExpandS) {
+      const bool on_q = p.action == jzradius::kPairExpandQ;
+      for (int32_t c = p.c0; c < p.c1; ++c) {
+        const int32_t idx = atomicAdd(&counts[0], 1);
+        if (idx < next_cap) {
+          next_out[2 * idx] = on_q ? c : nq;
+          next_out[2 * idx + 1] = on_q ? ns : c;
+        } else {
+          atomicExch(&counts[2], 1);
+        }
+      }
+      continue;
+    }
+    if (p.action == jzradius::kPairExpandDiag) {
+      for (int32_t ia = p.c0; ia < p.c1; ++ia) {
+        for (int32_t ib = ia; ib < p.c1; ++ib) {
+          int32_t idx = atomicAdd(&counts[0], 1);
+          if (idx < next_cap) {
+            next_out[2 * idx] = ia;
+            next_out[2 * idx + 1] = ib;
+          } else {
+            atomicExch(&counts[2], 1);
+          }
+          if (!unique_pairs && ia != ib) {
+            idx = atomicAdd(&counts[0], 1);
+            if (idx < next_cap) {
+              next_out[2 * idx] = ib;
+              next_out[2 * idx + 1] = ia;
+            } else {
+              atomicExch(&counts[2], 1);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+static ffi::Error WorkItemsImpl(
+    cudaStream_t stream, ffi::AnyBuffer qstart, ffi::AnyBuffer qcount,
+    ffi::AnyBuffer qleft, ffi::AnyBuffer qright, ffi::AnyBuffer qlo,
+    ffi::AnyBuffer qhi, ffi::AnyBuffer sstart, ffi::AnyBuffer scount,
+    ffi::AnyBuffer sleft, ffi::AnyBuffer sright, ffi::AnyBuffer slo,
+    ffi::AnyBuffer shi, ffi::AnyBuffer frontier, int32_t self_query,
+    int32_t unique_pairs, double r_max, double prune_tol, double boxsize,
+    ffi::Result<ffi::AnyBuffer> next_out, ffi::Result<ffi::AnyBuffer> work_out,
+    ffi::Result<ffi::AnyBuffer> counts) {
+  const int64_t n_q = qstart.element_count();
+  const int64_t n_s = sstart.element_count();
+  const int64_t n_in = frontier.element_count() / 2;
+  const int64_t next_cap = next_out->element_count() / 2;
+  const int64_t work_cap = work_out->element_count() / 4;
+  const bool shapes_ok =
+      qcount.element_count() == n_q && qleft.element_count() == n_q &&
+      qright.element_count() == n_q && qlo.element_count() == 3 * n_q &&
+      qhi.element_count() == 3 * n_q && scount.element_count() == n_s &&
+      sleft.element_count() == n_s && sright.element_count() == n_s &&
+      slo.element_count() == 3 * n_s && shi.element_count() == 3 * n_s &&
+      frontier.element_count() == 2 * n_in &&
+      next_out->element_count() == 2 * next_cap &&
+      work_out->element_count() == 4 * work_cap &&
+      counts->element_count() == 3;
+  const bool dtypes_ok =
+      qstart.element_type() == ffi::DataType::S32 &&
+      qcount.element_type() == ffi::DataType::S32 &&
+      qleft.element_type() == ffi::DataType::S32 &&
+      qright.element_type() == ffi::DataType::S32 &&
+      sstart.element_type() == ffi::DataType::S32 &&
+      scount.element_type() == ffi::DataType::S32 &&
+      sleft.element_type() == ffi::DataType::S32 &&
+      sright.element_type() == ffi::DataType::S32 &&
+      frontier.element_type() == ffi::DataType::S32 &&
+      next_out->element_type() == ffi::DataType::S32 &&
+      work_out->element_type() == ffi::DataType::S32 &&
+      counts->element_type() == ffi::DataType::S32 &&
+      qlo.element_type() == ffi::DataType::F64 &&
+      qhi.element_type() == ffi::DataType::F64 &&
+      slo.element_type() == ffi::DataType::F64 &&
+      shi.element_type() == ffi::DataType::F64;
+  if (!shapes_ok || !dtypes_ok) {
+    return ffi::Error::InvalidArgument("jzradius: work-items buffer mismatch");
+  }
+  jzradius::NodeArrays q{
+      static_cast<const int32_t*>(qstart.untyped_data()),
+      static_cast<const int32_t*>(qcount.untyped_data()),
+      static_cast<const int32_t*>(qleft.untyped_data()),
+      static_cast<const int32_t*>(qright.untyped_data()),
+      static_cast<const double*>(qlo.untyped_data()),
+      static_cast<const double*>(qhi.untyped_data())};
+  jzradius::NodeArrays s{
+      static_cast<const int32_t*>(sstart.untyped_data()),
+      static_cast<const int32_t*>(scount.untyped_data()),
+      static_cast<const int32_t*>(sleft.untyped_data()),
+      static_cast<const int32_t*>(sright.untyped_data()),
+      static_cast<const double*>(slo.untyped_data()),
+      static_cast<const double*>(shi.untyped_data())};
+  // Output buffers are not guaranteed to be zero-initialised by XLA.
+  cudaMemsetAsync(counts->untyped_data(), 0, 3 * sizeof(int32_t), stream);
+  if (n_in <= 0) return ffi::Error::Success();
+  const int threads = 128;
+  int blocks = static_cast<int>((n_in + threads - 1) / threads);
+  if (blocks > 65535) blocks = 65535;
+  work_items_kernel<<<blocks, threads, 0, stream>>>(
+      q, s, static_cast<const int32_t*>(frontier.untyped_data()),
+      static_cast<int32_t>(n_in), static_cast<int32_t>(next_cap),
+      static_cast<int32_t>(work_cap), self_query, unique_pairs, r_max,
+      prune_tol, boxsize, static_cast<int32_t*>(next_out->untyped_data()),
+      static_cast<int32_t*>(work_out->untyped_data()),
+      static_cast<int32_t*>(counts->untyped_data()));
+  return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    JzRadiusWork, WorkItemsImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()  // qstart
+        .Arg<ffi::AnyBuffer>()  // qcount
+        .Arg<ffi::AnyBuffer>()  // qleft
+        .Arg<ffi::AnyBuffer>()  // qright
+        .Arg<ffi::AnyBuffer>()  // qlo
+        .Arg<ffi::AnyBuffer>()  // qhi
+        .Arg<ffi::AnyBuffer>()  // sstart
+        .Arg<ffi::AnyBuffer>()  // scount
+        .Arg<ffi::AnyBuffer>()  // sleft
+        .Arg<ffi::AnyBuffer>()  // sright
+        .Arg<ffi::AnyBuffer>()  // slo
+        .Arg<ffi::AnyBuffer>()  // shi
+        .Arg<ffi::AnyBuffer>()  // frontier (n_in, 2)
+        .Attr<int32_t>("self_query")
+        .Attr<int32_t>("unique_pairs")
+        .Attr<double>("r_max")
+        .Attr<double>("prune_tol")
+        .Attr<double>("boxsize")
+        .Ret<ffi::AnyBuffer>()  // next frontier (cap, 2)
+        .Ret<ffi::AnyBuffer>()  // work items (cap, 4)
+        .Ret<ffi::AnyBuffer>()  // counts (3,)
+    ,
+    {xla::ffi::Traits::kCmdBufferCompatible});

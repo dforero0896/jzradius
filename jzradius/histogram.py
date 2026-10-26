@@ -36,6 +36,7 @@ from .config import (
 from .errors import JzRadiusError, RadiusConfigError
 from .tree_adapter import RadiusTree, build_naive_radius_tree, build_radius_tree_from_jztree
 from .traversal import build_work_items
+from .work_queue import build_work_items_device
 
 __all__ = ["radius_softmax_histogram", "build_radius_trees"]
 
@@ -387,15 +388,28 @@ def _hist_core_fwd(
     # Only `unique` enumerates unordered pairs once; `directed_half` walks all
     # ordered i != j pairs and halves the contribution (PLAN.md 6.5).
     triangular = pair_convention == "unique"
-    work = build_work_items(
-        tree_q,
-        tree_s,
-        r_max=float(r_max),
-        boxsize=float(boxsize),
-        max_work_items=int(max_work_items),
-        unique_pairs=triangular,
-    )
+    # On the GPU the descent runs as device kernels (D012/D013); the CPU path
+    # keeps the interpreted descent, which is what the tests cross-check.
+    if jax.default_backend() == "gpu":
+        work = build_work_items_device(
+            tree_q,
+            tree_s,
+            r_max=float(r_max),
+            boxsize=float(boxsize),
+            max_work_items=int(max_work_items),
+            unique_pairs=triangular,
+        )
+    else:
+        work = build_work_items(
+            tree_q,
+            tree_s,
+            r_max=float(r_max),
+            boxsize=float(boxsize),
+            max_work_items=int(max_work_items),
+            unique_pairs=triangular,
+        )
     work_j = jnp.asarray(work, dtype=jnp.int32)
+    n_work = int(work_j.shape[0])
     centers_j = jnp.asarray(centers_np, dtype=jnp.float64)
 
     eps = 1e-30 if q_np.dtype == np.float32 else 1e-60
@@ -405,7 +419,7 @@ def _hist_core_fwd(
         n_q=int(q_np.shape[0]),
         n_s=int(s_np.shape[0]),
         n_bins=int(centers_np.size),
-        n_work=int(work.shape[0]),
+        n_work=n_work,
         self_query=bool(self_query),
         triangular=triangular,
         mode=mode,
