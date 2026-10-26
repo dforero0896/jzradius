@@ -115,31 +115,48 @@ def _as_2d(a, name: str) -> np.ndarray:
 
 
 def _fill_boxes(tree: RadiusTree) -> None:
-    """Fill ``node_lo/hi/center/radius`` from leaves and child unions."""
+    """Fill ``node_lo/hi/center/radius`` from leaves and child unions.
+
+    Fully vectorised: children of a level always partition the level below
+    contiguously, so each parent's box is a segment reduction over the child
+    array (:func:`numpy.minimum.reduceat`).  No per-node Python loop.
+    """
     pos = tree.sorted_pos
-    for k in range(tree.n_nodes):
-        if tree.is_leaf[k]:
-            s = int(tree.node_start[k])
-            e = s + int(tree.node_count[k])
-            if e > s:
-                tree.node_lo[k] = pos[s:e].min(axis=0)
-                tree.node_hi[k] = pos[s:e].max(axis=0)
-            else:
-                tree.node_lo[k] = tree.node_hi[k] = tree.node_center[k]
-    # parents always have a strictly larger level than their children, so
-    # processing in increasing level order visits children first regardless of
-    # how node ids were assigned (level planes give smaller ids, the naive
-    # pre-order builder gives larger ones).
-    order = np.argsort(tree.node_level, kind="stable")
-    for k in order:
-        k = int(k)
-        if tree.is_leaf[k]:
-            continue
-        c0, c1 = int(tree.node_left[k]), int(tree.node_right[k])
-        if c1 <= c0:
-            raise _tree_error(f"internal node {k} has no children")
-        tree.node_lo[k] = tree.node_lo[c0:c1].min(axis=0)
-        tree.node_hi[k] = tree.node_hi[c0:c1].max(axis=0)
+    leaves = tree.is_leaf
+    if np.any(tree.node_count[leaves] <= 0):
+        raise _tree_error("leaf with empty particle range")
+    tree.node_lo[:] = np.inf
+    tree.node_hi[:] = -np.inf
+    tree.node_lo[leaves] = np.minimum.reduceat(
+        pos, tree.node_start[leaves], axis=0
+    )
+    tree.node_hi[leaves] = np.maximum.reduceat(
+        pos, tree.node_start[leaves], axis=0
+    )
+
+    # Boxes are accumulated child -> parent with a scatter reduction, so the
+    # result does not depend on how ids were assigned.  Children must be final
+    # before they are folded in, hence the children-first level order (the
+    # level-plane adapter numbers parents above children, the naive pre-order
+    # builder below).
+    internal = ~leaves
+    if np.any(internal):
+        k0 = int(np.flatnonzero(internal)[0])
+        child_level = tree.node_level[tree.node_left[k0]]
+        levels = np.unique(tree.node_level)
+        if child_level > tree.node_level[k0]:
+            levels = levels[::-1]
+        for lev in levels:
+            ks = np.flatnonzero((tree.node_level == lev) & (tree.node_parent >= 0))
+            if ks.size == 0:
+                continue
+            par = tree.node_parent[ks]
+            np.minimum.at(tree.node_lo, par, tree.node_lo[ks])
+            np.maximum.at(tree.node_hi, par, tree.node_hi[ks])
+    if not np.all(np.isfinite(tree.node_lo)):
+        raise _tree_error("internal node box was never filled")
+    tree.node_center[:] = 0.5 * (tree.node_lo + tree.node_hi)
+    tree.node_radius = 0.5 * np.linalg.norm(tree.node_hi - tree.node_lo, axis=1)
     tree.node_center[:] = 0.5 * (tree.node_lo + tree.node_hi)
     tree.node_radius = 0.5 * np.linalg.norm(tree.node_hi - tree.node_lo, axis=1)
 
@@ -250,8 +267,9 @@ def build_radius_tree_from_levels(
             )
         node_left[off:off + n] = child_off + cs[:-1]
         node_right[off:off + n] = child_off + cs[1:]
-        for k in range(n):
-            node_parent[child_off + cs[k]:child_off + cs[k + 1]] = off + k
+        node_parent[child_off:child_off + per_level_nodes[li - 1]] = np.repeat(
+            off + np.arange(n, dtype=np.int64), np.diff(cs)
+        )
 
     # virtual root over the top level
     top = len(levels) - 1
@@ -364,12 +382,59 @@ def build_radius_tree_from_jztree(
             )
         )
     return build_radius_tree_from_levels(
-        levels,
+        add_balancing_levels(levels),
         sorted_pos,
         sorted_to_orig,
         boxsize=boxsize,
         leaf_size=leaf_size,
     )
+
+
+def add_balancing_levels(
+    levels: Sequence[LevelData], group: int = 4
+) -> List[LevelData]:
+    """Append coarse planes that group the nodes of the previous plane.
+
+    jztree picks its tree depth from ``TreeConfig.stop_coarsen`` (default
+    1024), so below ~6e4 particles it returns a *flat* hierarchy whose root
+    children are every leaf.  A dual-tree walk then degenerates to a
+    leaf-by-leaf comparison (measured 2.3e6 node-pair visits at N=5e4 vs 5e5
+    at N=1e5) and dominates the runtime.  Grouping nodes into ``group``-ary
+    parents keeps the pair set identical -- leaves and their particle ranges
+    are untouched, and the new boxes are conservative unions -- while
+    restoring a logarithmic descent.
+    """
+    if group < 2:
+        raise _tree_error(f"invalid balancing group {group}")
+    out = list(levels)
+    while len(out[-1].center) > group:
+        prev = out[-1]
+        centers = np.asarray(prev.center, dtype=np.float64)
+        n_prev = int(centers.shape[0])
+        cs = np.unique(np.minimum(np.arange(0, n_prev + group, group), n_prev))
+        if cs[0] != 0 or cs[-1] != n_prev:
+            raise _tree_error("balancing splits do not cover the previous plane")
+        # ``leaf_splits`` of the leaf plane is in particle-index space, of any
+        # coarser plane in leaf-index space (see build_radius_tree_from_levels).
+        if prev is levels[0]:
+            prev_leaf_idx = np.arange(n_prev + 1, dtype=np.int64)
+        else:
+            prev_leaf_idx = np.asarray(prev.leaf_splits, dtype=np.int64)
+        ls = prev_leaf_idx[cs]
+        new_center = np.stack(
+            [centers[a:b].mean(axis=0) for a, b in zip(cs[:-1], cs[1:])]
+        )
+        out.append(
+            LevelData(
+                center=new_center,
+                level=np.full(
+                    len(cs) - 1, int(np.max(np.asarray(prev.level))) + 1
+                ),
+                leaf_splits=ls,
+                child_splits=cs,
+            )
+        )
+    return out
 
 
 def build_naive_radius_tree(
@@ -489,37 +554,68 @@ def check_tree_invariants(tree: RadiusTree) -> None:
     if tree.node_parent[tree.root] != -1:
         raise _tree_error("root has a parent")
 
-    for k in range(m):
-        s, c = int(tree.node_start[k]), int(tree.node_count[k])
-        if s < 0 or c < 0 or s + c > n:
-            raise _tree_error(f"node {k} particle range out of bounds")
-        if tree.is_leaf[k]:
-            if c > tree.leaf_size:
-                raise _tree_error(
-                    f"leaf {k} holds {c} > leaf_size {tree.leaf_size}"
-                )
-        else:
-            c0, c1 = int(tree.node_left[k]), int(tree.node_right[k])
-            if not (0 <= c0 < c1 <= m):
-                raise _tree_error(f"node {k} child range invalid")
-            child_counts = int(tree.node_count[c0:c1].sum())
-            if child_counts != c:
-                raise _tree_error(
-                    f"node {k} count {c} != children count {child_counts}"
-                )
-            if not np.all(tree.node_parent[c0:c1] == k):
-                raise _tree_error(f"node {k} children have wrong parent")
-            if np.any(tree.node_lo[c0:c1] < tree.node_lo[k] - 1e-9) or np.any(
-                tree.node_hi[c0:c1] > tree.node_hi[k] + 1e-9
-            ):
-                raise _tree_error(f"node {k} box does not contain its children")
+    starts, counts = tree.node_start, tree.node_count
+    if (np.any(starts < 0) or np.any(counts < 0)
+            or np.any(starts + counts > n)):
+        bad = int(np.flatnonzero(
+            (starts < 0) | (counts < 0) | (starts + counts > n))[0])
+        raise _tree_error(f"node {bad} particle range out of bounds")
+    leaves = tree.is_leaf
+    if np.any(counts[leaves] > tree.leaf_size):
+        bad = int(np.flatnonzero(leaves & (counts > tree.leaf_size))[0])
+        raise _tree_error(
+            f"leaf {bad} holds {counts[bad]} > leaf_size {tree.leaf_size}"
+        )
 
-    covered = np.zeros(n, dtype=bool)
-    for k in range(m):
-        if tree.is_leaf[k]:
-            s, c = int(tree.node_start[k]), int(tree.node_count[k])
-            covered[s:s + c] = True
-    if not covered.all():
-        raise _tree_error("leaves do not cover all particles")
+    internal = np.flatnonzero(~leaves)
+    if internal.size:
+        c0 = tree.node_left[internal]
+        c1 = tree.node_right[internal]
+        if np.any(c0 < 0) or np.any(c1 <= c0) or np.any(c1 > m):
+            bad = int(internal[np.flatnonzero(
+                (c0 < 0) | (c1 <= c0) | (c1 > m))[0]])
+            raise _tree_error(f"node {bad} child range invalid")
+        # segment sums over [c0, c1) in O(1) each via a prefix sum
+        prefix = np.concatenate(([0], np.cumsum(counts)))
+        child_counts = prefix[c1] - prefix[c0]
+        if np.any(child_counts != counts[internal]):
+            bad = int(internal[np.flatnonzero(
+                child_counts != counts[internal])[0]])
+            raise _tree_error(
+                f"node {bad} count {counts[bad]} != children count "
+                f"{child_counts[internal == bad][0]}"
+            )
+        # every non-root node must sit inside its parent's child range, and the
+        # child ranges must cover exactly the non-root nodes
+        parent_of = tree.node_parent
+        has_parent = np.flatnonzero(parent_of >= 0)
+        if has_parent.size != m - 1:
+            raise _tree_error("nodes without a parent are not just the root")
+        p = parent_of[has_parent]
+        if np.any(leaves[p]):
+            raise _tree_error("a leaf node claims to have children")
+        inside = (has_parent >= tree.node_left[p]) & (has_parent < tree.node_right[p])
+        if not np.all(inside):
+            bad = int(has_parent[np.flatnonzero(~inside)[0]])
+            raise _tree_error(f"node {bad} is not inside its parent's child range")
+        if int(np.sum(c1 - c0)) != m - 1:
+            raise _tree_error("child ranges do not cover all non-root nodes")
+        child_ok = (
+            tree.node_lo[has_parent] >= tree.node_lo[p] - 1e-9
+        ) & (tree.node_hi[has_parent] <= tree.node_hi[p] + 1e-9)
+        if not np.all(child_ok):
+            bad = int(has_parent[np.flatnonzero(~child_ok)[0]])
+            raise _tree_error(f"node {bad} box does not contain its children")
+
+    leaf_starts = starts[leaves]
+    leaf_ends = leaf_starts + counts[leaves]
+    if leaf_starts.size == 0:
+        if n != 0:
+            raise _tree_error("leaves do not cover all particles")
+    else:
+        order = np.argsort(leaf_starts)
+        s, e = leaf_starts[order], leaf_ends[order]
+        if s[0] != 0 or e[-1] != n or np.any(s[1:] != e[:-1]):
+            raise _tree_error("leaves do not cover all particles")
     if tree.node_count[tree.root] != n:
         raise _tree_error("root does not cover all particles")

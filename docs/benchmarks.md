@@ -49,6 +49,46 @@ These numbers are dominated by the scalar CPU loops and host tree build. They
 are useful only as a correctness-path sanity check and to bound the work-item
 count; they say nothing about GPU throughput.
 
+## M9 component breakdown (post device work queue and tree balancing)
+
+`scripts/bench_components.py`, median of 5 repetitions, node-local scratch
+(`/tmp`, never NFS -- see D003), one A30, float64, `L=1.0`, `r_max=0.05`,
+20 bins, `temperature=0.05`, `leaf_size=32`, `self_query=True`, uniform points.
+Frozen v1 numbers are in `benchmarks/baseline_v1.json`, the current tree in
+`benchmarks/components.json`. `host_frac` = (`wall_fwd` - device stages) /
+`wall_fwd`, where the device stages are the jztree build, the device work-item
+queue and the histogram kernel.
+
+| N | nodes | work items | jztree build | flatten | host descent | device queue | fwd kernel | wall fwd | wall grad | host frac |
+|---|-------|-----------|--------------|---------|--------------|--------------|------------|----------|-----------|-----------|
+| 1e4 | 636 | 6 487 | 130 ms | 8 ms | 201 ms | 8.5 ms | 0.7 ms | 0.162 s | 0.164 s | 14.0% |
+| 5e4 | 2 885 | 29 761 | 146 ms | 13 ms | 1 021 ms | 9.6 ms | 1.5 ms | 0.180 s | 0.194 s | 12.5% |
+| 1e5 | 5 398 | 63 854 | 159 ms | 21 ms | 1 303 ms | 9.6 ms | 2.7 ms | 0.310 s | 0.322 s | 44.7% |
+
+Reading of the table:
+
+- The **device work queue** (D013) is 20-130x faster than the interpreted host
+  descent it replaces: 1.30 s -> 9.6 ms at N=1e5. Its item set is compared
+  against the host descent on every benchmark case
+  (`work_items_device_matches_host`).
+- **Tree balancing** (D014) removed the flat-hierarchy cliff: jztree returns a
+  root-with-all-leaves tree below ~6e4 particles, so N=5e4 used to cost
+  2.31e6 node-pair visits in the host descent. After grouping the leaves into
+  4-ary parents the same case needs 2.17e5 visits and the old N=5e4 anomaly
+  (1.26 s, 4-7x slower than N=1e5) is gone: 0.180 s.
+- **v1 comparison** (`baseline_v1.json`, same node, same protocol) at N=1e5:
+  wall fwd 2.906 s -> 0.310 s (9.4x), wall grad 2.916 s -> 0.322 s, host
+  fraction 95.4% -> 44.7%.
+- `bwd/fwd` = `wall_grad/wall_fwd` = 1.01-1.08, well inside the <= 2.0 target.
+- The remaining host time is the Python call path around the kernels
+  (input validation, `jnp.take` permutation, `ffi_call` dispatch, device->host
+  sync), not tree construction. Getting it under the plan addendum's 10%
+  target at N=1e5 needs the jit-able entry point (M9.2, D008), where that
+  Python work is traced away instead of re-executed per call.
+- N=1e6 was **not** run: it is a scale-tier measurement that needs approval
+  (PLAN.md 2.6), and with 20 neighbours it would need ~1e7 interactions
+  (~120 MB) for the interaction list alone.
+
 ## Targets from the plan (§21)
 
 - 10^6 particles forward: seconds, not minutes.

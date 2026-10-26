@@ -1,0 +1,116 @@
+{
+  "created_utc": "2026-10-26T11:10:11Z",
+  "git_commit": "",
+  "git_describe": "",
+  "host": "gn02",
+  "cwd": "/tmp/bv1",
+  "repeats": 5,
+  "temperature": 0.05,
+  "bins": 20,
+  "cases": [
+    {
+      "N": 10000,
+      "leaf_size": 32,
+      "dtype": "float64",
+      "r_max": 0.05,
+      "n_work_items": 6487,
+      "n_nodes": 477,
+      "backend": "gpu",
+      "device": "NVIDIA A30",
+      "work_items_device_matches_host": null,
+      "tree_build_gpu_s": {
+        "median": 0.15847202483564615,
+        "min": 0.10923037864267826,
+        "max": 0.2747951289638877
+      },
+      "flatten_s": {
+        "median": 0.009809569455683231,
+        "min": 0.009553157724440098,
+        "max": 0.010030092671513557
+      },
+      "workitems_host_s": {
+        "median": 0.5738340122625232,
+        "min": 0.5696927029639482,
+        "max": 0.5754891466349363
+      },
+      "workitems_device_s": null,
+      "forward_kernel_s": {
+        "median": 0.0007423181086778641,
+        "min": 0.0007146066054701805,
+        "max": 0.000764806754887104
+      },
+      "backward_kernel_s": {
+        "median": 0.0005187550559639931,
+        "min": 0.0005073240026831627,
+        "max": 0.0005751149728894234
+      },
+      "python_overhead_s": {
+        "median": 0.5832040570676327,
+        "min": 0.5918629188090563,
+        "max": 0.49779109936207533
+      },
+      "wall_fwd_s": {
+        "median": 0.7424184000119567,
+        "min": 0.7018079040572047,
+        "max": 0.7733510350808501
+      },
+      "wall_fwd_bwd_s": {
+        "median": 0.7506235046312213,
+        "min": 0.7016012826934457,
+        "max": 0.8160289991647005
+      }
+    },
+    {
+      "N": 100000,
+      "leaf_size": 32,
+      "dtype": "float64",
+      "r_max": 0.05,
+      "n_work_items": 63854,
+      "n_nodes": 5128,
+      "backend": "gpu",
+      "device": "NVIDIA A30",
+      "work_items_device_matches_host": null,
+      "tree_build_gpu_s": {
+        "median": 0.13204658031463623,
+        "min": 0.10685474704951048,
+        "max": 0.15513582341372967
+      },
+      "flatten_s": {
+        "median": 0.06014480534940958,
+        "min": 0.059736061841249466,
+        "max": 0.11891424935311079
+      },
+      "workitems_host_s": {
+        "median": 2.617312385700643,
+        "min": 2.61650684569031,
+        "max": 2.644592083990574
+      },
+      "workitems_device_s": null,
+      "forward_kernel_s": {
+        "median": 0.0025619734078645706,
+        "min": 0.0025543533265590668,
+        "max": 0.0025910036638379097
+      },
+      "backward_kernel_s": {
+        "median": 0.002525603398680687,
+        "min": 0.0025014728307724,
+        "max": 0.002682715654373169
+      },
+      "python_overhead_s": {
+        "median": 2.7714396389201283,
+        "min": 2.786494618281722,
+        "max": 3.0987125914543867
+      },
+      "wall_fwd_s": {
+        "median": 2.906048192642629,
+        "min": 2.8959037186577916,
+        "max": 3.2564394185319543
+      },
+      "wall_fwd_bwd_s": {
+        "median": 2.9160647243261337,
+        "min": 2.8864200823009014,
+        "max": 3.0196459218859673
+      }
+    }
+  ]
+}

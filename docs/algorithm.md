@@ -65,6 +65,50 @@ for both the forward and the backward target. Properties:
 - work items depend only on geometry and `r_max`, so the backward pass reuses
   the forward's list instead of re-traversing with different rounding.
 
+### Device-side work queue (`jzradius/work_queue.py`)
+
+The interpreted descent above costs O(number of node-pair visits) in Python,
+which was 88% of an N=1e5 call (2.59 s of 2.91 s, D012/D013). The public call
+therefore uses a device queue on a GPU: `build_work_items_device` drives one
+typed-FFI kernel per breadth-first level (`JzRadiusWork` on CUDA,
+`JzRadiusWorkCpu` as the CPU mirror), and only the three-int32 level summary is
+read back.
+
+- The prune/emit/expand decision lives in exactly one place,
+  `src/cuda/jzradius_kernels.cuh::plan_pair`, compiled by both `nvcc` and `g++`.
+  CUDA and the CPU mirror cannot drift because there is only one decision
+  function.
+- Each level pre-allocates a next-frontier buffer and a work-item buffer sized
+  from the node count. If a level overflows, the kernel sets an overflow flag
+  and returns partial counts; the driver re-runs that level with 4x the buffers.
+  Repeated failure or exceeding `max_work_items` raises `WorkQueueOverflow` --
+  the same fail-loud contract as the host path.
+- Both paths must return the identical set of rectangles; that parity is the
+  hard gate in `tests/test_device_workitems.py` (self and cross, `unique` and
+  ordered, several N and `r_max`) and is asserted on every case of
+  `scripts/bench_components.py`.
+- The host descent is kept as the CPU implementation and as the parity oracle
+  for the deviceless case.
+
+### Balancing levels over a flat jztree hierarchy (D014)
+
+jztree decides the tree depth from `TreeConfig(coarse_fac=6.0,
+stop_coarsen=1024)`, so below ~6e4 particles it returns a *flat* hierarchy: one
+leaf plane plus the synthetic root, with the root directly parenting every
+leaf. A dual-tree descent over that shape degenerates to leaf-by-leaf
+comparison -- 2.31e6 node-pair visits at N=5e4, versus 5.0e5 at N=1e5, which is
+why the old N=5e4 timing looked pathological.
+
+`add_balancing_levels(levels, group=4)` inserts synthetic parent planes above
+the coarsest real plane: consecutive groups of at most `group` nodes get a
+parent, repeated until the top fan-out is <= `group`. Because the new levels
+only regroup existing nodes, the leaf set, the particle ranges and the accepted
+pair set are unchanged; the new bounding boxes are conservative unions
+(`node_lo/node_hi` are a `min`/`max` reduction over children, so a parent box
+always contains its children). N=5e4 drops to 2.17e5 visits and 0.180 s wall
+time, and `test_add_balancing_levels_preserves_leaves_and_boxes` pins the
+invariant that the leaf set and the pair set do not change.
+
 ## 4. Pair conventions
 
 | setting | enumerated | scale |

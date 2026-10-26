@@ -85,15 +85,19 @@ traversal (`jzradius/traversal.py` for CPU/work-item generation,
 `src/cuda/jzradius_cuda.cu` for the device kernels). No approximate-KNN result
 is used to claim a radius query.
 
-## 11. Host-side tree build dominates runtime
+## 11. Residual host work in the call path
 
-`custom_vjp`'s forward rule builds the jztree hierarchy and the work-item list
-on the host in Python/NumPy. On one A30 (float64, 20 bins, `r_max=0.05`,
-`L=1`) the forward call takes 0.76 s at N=1e4, 3.05 s at N=1e5 and 18.2 s at
-N=3e5, and `jax.grad` costs about the same, i.e. the kernels are a small
-fraction of the total. The PLAN §21 targets (1e6 particles in seconds) are
-therefore **not** met by v1; see D012 and `docs/benchmarks.md`. Moving tree
-construction to device-resident JAX is the planned M9 fix.
+`custom_vjp`'s forward rule builds the jztree hierarchy on the device but still
+flattens it and drives the FFI calls from Python. After the M9 work (device-side
+dual-tree work queue, D013, and balancing levels over jztree's flat small-N
+hierarchies, D014) the wall-clock forward on one A30 (float64, 20 bins,
+`r_max=0.05`, `L=1`) is 0.162 s at N=1e4, 0.180 s at N=5e4 and 0.310 s at
+N=1e5, with `jax.grad` within 1.08x, i.e. 9.4x faster than v1 at N=1e5. The
+host share of the call is 14% at N=1e4 and 45% at N=1e5 (validation,
+`jnp.take`, `ffi_call` dispatch, sync) -- that, not the tree build, is what
+remains of D012. The PLAN §21 targets (1e6 particles in seconds) are still not
+demonstrated: N=1e6 needs the §2.5 scale-tier approval, and removing the Python
+overhead needs the jit-able entry point (next item).
 
 ## 12. Eager-only public API
 
@@ -113,12 +117,13 @@ traversal and kernels) but slower to build. See D011.
 
 - CPU mirror of the shared arithmetic: compiled (`libjzradius_cpu.so`) and
   exercised through the **same typed-FFI/custom_vjp path** as the GPU build;
-  `237 passed, 2 skipped` (with the optional pyfcfc cross-check enabled:
-  `239 passed`).
+  237 passed, 3 skipped (skips: the GPU-only jztree adapter test, the
+  jztree-dependent FFI test when jztree is not on `PYTHONPATH`, and the optional
+  pyfcfc cross-check; all three clear on a GPU node / with pyfcfc).
 - CUDA: `nvcc` 12.3 builds `libjzradius_cuda.so` for `sm_80/86/89/90` and
   exports `JzRadiusForward`, `JzRadiusBackward`, `JzRadiusNodeBounds`.
 - CUDA **runtime**: exercised on one A30 (driver 610.57.04). The complete suite
-  passes on the device — `235 passed` in 186 s with `JAX_PLATFORMS=cuda,cpu` —
+  passes on the device -- 239 passed in ~190 s with `JAX_PLATFORMS=cuda,cpu` --
   including forward parity against `reference_histogram` for f32/f64,
   softmax/Gaussian, and position/weight gradients against
   `jax.grad(reference_histogram)` for self and cross correlation.

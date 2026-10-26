@@ -12,7 +12,7 @@ weights), using a dual-tree traversal instead of an O(N²) pair list.
 Pre-alpha. The full stack exists: periodic bounds, tree adapter, exact
 dual-tree traversal, CUDA forward/backward kernels, typed XLA-FFI host
 launchers, build integration and the `custom_vjp` wrapper. The kernels run on
-device: the complete suite (`235 passed`) passes on one A30, including forward
+device: the complete suite (239 passed) passes on one A30, including forward
 parity with the brute-force oracle and position/weight gradients matched
 against `jax.grad(reference_histogram)` for self and cross correlation. Known
 gaps are performance (the tree build is host-side, D012) and the eager-only
@@ -59,9 +59,9 @@ not supported in v1 (D008); the gradient itself is the analytic kernel VJP.
 
 ```bash
 python scripts/build_ext.py            # CPU mirror (+ CUDA when nvcc exists)
-JAX_PLATFORMS=cpu .venv/bin/python -m pytest tests/ -q   # 237 passed, 2 skipped
+JAX_PLATFORMS=cpu .venv/bin/python -m pytest tests/ -q   # 237 passed, 3 skipped
 # on a GPU node (both platforms registered: some tests use jax.io_callback)
-JAX_PLATFORMS=cuda,cpu .venv/bin/python -m pytest tests/ -q   # 235 passed
+JAX_PLATFORMS=cuda,cpu .venv/bin/python -m pytest tests/ -q   # 239 passed
 ```
 
 Tiered runners (`scripts/run_smoke.py`, `run_unit.py`, `run_integration.py`)
@@ -87,9 +87,12 @@ shift `(1.2, -0.8, 0.6) → (1.1999, -0.7999, 0.5996)` in 250 steps. Numbers and
 the smoothness discussion: `docs/examples.md`.
 
 Measured A30 timings (float64, r_max = 0.05, 20 bins) are in
-`docs/benchmarks.md`: forward 0.76 s at 1e4, 3.05 s at 1e5, 18.2 s at 3e5
-particles; the backward pass costs about the same as the forward because the
-host-side tree build dominates (D012).
+`docs/benchmarks.md`. After the M9 work (device-side dual-tree work queue and
+balancing levels over jztree's flat small-N hierarchies) the wall-clock forward
+is 0.162 s at 1e4, 0.180 s at 5e4 and 0.310 s at 1e5 particles, with
+`jax.grad` within 1.08x. That is 9.4x faster than v1 at 1e5 (2.906 s); the
+remaining host share of the call is what the jit-able entry point (D008) is
+meant to remove.
 
 ## Layout
 

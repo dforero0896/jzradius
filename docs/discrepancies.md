@@ -117,3 +117,31 @@ Measured on one A30 (float64, 20 bins, r_max=0.05, L=1): fwd 0.76 s (n=1e4),
 negligible beside the Python/NumPy tree + work-item construction. The >=1e6
 scale tier still needs approval; device-side tree construction is the M9 fix.
 Classification: PERFORMANCE.
+
+## D013 — Dual-tree work queue runs on the device (plan §11, addendum M9.1)
+
+The host descent in `jzradius/traversal.py` is interpreted Python and was 88%
+of the call at N=1e5 (2.59 s of 2.91 s). The descent now runs as one typed-FFI
+kernel per BFS level (`JzRadiusWork`/`JzRadiusWorkCpu`), with the prune/expand
+decision factored into `jzradius::plan_pair` in the shared arithmetic header so
+the CUDA kernel and its CPU mirror cannot drift. The host descent is kept as
+the reference implementation and the parity oracle
+(`tests/test_device_workitems.py`). Budgets are per-level capacities; an
+overflow re-runs that level with 4x buffers, and a level that cannot fit
+raises instead of silently dropping interactions. Measured (A30, N=1e5,
+leaf_size=32, r_max=0.05): work items 2.59 s -> 9.6 ms, end-to-end forward
+2.91 s -> 0.31 s, identical item sets. Classification: PERFORMANCE.
+
+## D014 — Balancing levels on top of a flat jztree hierarchy (plan §9.4, M9.1)
+
+`jztree` derives its tree depth from `TreeConfig.stop_coarsen=1024` and
+`coarse_fac=6`, so below ~6e4 particles it returns a *flat* hierarchy: at
+N=5e4 the adapted tree had 2168 leaves and 0 internal nodes other than the
+virtual root, i.e. the root's children were every leaf. The dual-tree walk then
+degenerates to leaf-by-leaf comparison (2 305 879 node-pair visits,
+36 node-pair visits per work item). `add_balancing_levels` groups the returned
+nodes into 4-ary parents until the top fan-out is <= 4; leaves, particle
+ranges and the pair set are unchanged (new boxes are conservative unions), and
+`check_tree_invariants` still passes. After: 216 598 visits at N=5e4 (10.6x
+fewer), wall forward 1.26 s -> 0.18 s; at N=1e5 0.455 s -> 0.31 s.
+Classification: PERFORMANCE.

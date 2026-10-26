@@ -21,11 +21,12 @@ env PYTHONPATH="$PWD:$V:$W" JAX_PLATFORMS=cpu .venv/bin/python -S scripts/run_un
 env PYTHONPATH="$PWD:$V:$W" JAX_PLATFORMS=cpu .venv/bin/python -S scripts/run_smoke.py
 ```
 
-Current totals: **237 passed, 2 skipped** on CPU, and **235 passed, 0 skipped**
-on a GPU (one A30, 186 s). The two CPU skips are the `@pytest.mark.gpu` jztree
-adapter test and `tests/test_external_pyfcfc.py`, which needs the optional
-pyfcfc build on `PYTHONPATH` (see `docs/examples.md`); with it available the CPU
-run is **239 passed**. The GPU run needs both platforms registered:
+Current totals: 237 passed, 3 skipped on CPU, and 239 passed, 0 skipped on a
+GPU (one A30, ~190 s). The CPU skips are the `@pytest.mark.gpu` jztree adapter
+test, the jztree-dependent FFI test when `jztree` is not on `PYTHONPATH`, and
+`tests/test_external_pyfcfc.py`, which needs the optional pyfcfc build (see
+`docs/examples.md`); all of them clear on a GPU node or with those two
+dependencies present. The GPU run needs both platforms registered:
 
 ```bash
 srun -p gpu --gres=gpu:1 -n1 -t 0:20:00 /bin/bash -c '

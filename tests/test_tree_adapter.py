@@ -187,3 +187,33 @@ def test_adapts_a_real_jztree_hierarchy(monkeypatch):
     check_tree_invariants(tree)
     assert tree.n_nodes > 1
     assert tree.node_count[tree.root] == 300
+
+
+def test_add_balancing_levels_preserves_leaves_and_boxes():
+    """Synthetic coarse planes must not change the leaves or the pair set."""
+    from jzradius.tree_adapter import add_balancing_levels
+
+    pos = _make("uniform", 7, 120)
+    flat = build_naive_radius_tree(pos, boxsize=BOX, leaf_size=8)
+    leaf_ids = np.flatnonzero(flat.is_leaf)  # not contiguous in a pre-order tree
+    n_leaf = leaf_ids.size
+    order = np.argsort(flat.node_start[leaf_ids])  # leaves in particle order
+    counts = flat.node_count[leaf_ids][order]
+    leaves = LevelData(
+        center=flat.node_center[leaf_ids][order],
+        level=np.zeros(n_leaf, dtype=np.int64),
+        leaf_splits=np.concatenate([[0], np.cumsum(counts)]),
+        child_splits=np.zeros(n_leaf + 1, dtype=np.int64),
+    )
+    balanced = add_balancing_levels([leaves], group=4)
+    assert len(balanced) > 1
+    assert int(balanced[-1].center.shape[0]) <= 4
+    tree = build_radius_tree_from_levels(
+        balanced, flat.sorted_pos, flat.sorted_to_orig, boxsize=BOX, leaf_size=8
+    )
+    check_tree_invariants(tree)
+    np.testing.assert_array_equal(
+        tree.node_start[:n_leaf], flat.node_start[leaf_ids][order]
+    )
+    np.testing.assert_array_equal(tree.node_count[:n_leaf], counts)
+    assert tree.node_right[tree.root] - tree.node_left[tree.root] <= 4
