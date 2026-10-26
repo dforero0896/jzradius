@@ -1,0 +1,16 @@
+# Sources needed to build the FFI libraries from an sdist.
+include LICENSE
+include README.md
+include pyproject.toml
+include setup.py
+include MANIFEST.in
+recursive-include src *.cpp *.cu *.cuh
+recursive-include scripts *.py
+recursive-include tests *.py
+recursive-include docs *.md
+
+# Native libraries are compiled by setup.py at build time; a checkout's
+# developer-built ones (including a CUDA library for whatever toolkit the
+# login node had) must never end up in a release artifact.
+prune jzradius/_libs
+global-exclude *.so *.o

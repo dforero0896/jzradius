@@ -1,14 +1,40 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+# `jax` is a build requirement, not just a runtime one: the FFI libraries are
+# compiled against the XLA FFI headers shipped inside jaxlib, and the pip build
+# hook asks `jax.ffi.include_dir()` where they are. Set JAXLIB_INCLUDE to skip
+# that lookup, or JZRADIUS_SKIP_NATIVE=1 to install without the libraries.
+requires = ["setuptools>=77", "wheel", "jax>=0.8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "jzradius"
-version = "0.0.1"
+version = "1.1.0.dev0"
 description = "Differentiable periodic two-point pair counting on GPU via Morton-tree radius traversal"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = [
+    "jax",
+    "cuda",
+    "pair-counting",
+    "two-point-correlation",
+    "periodic-boundary-conditions",
+    "differentiable",
+    "astronomy",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: CUDA",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 dependencies = [
     "jax>=0.8.0",
     "numpy>=2.2",
@@ -19,11 +45,26 @@ test = [
     "pytest>=8",
     "scipy",
 ]
-cuda12 = ["jztree[cuda12]"]
-cuda13 = ["jztree[cuda13]"]
+# jztree ships its CUDA backend as separate wheels; the extra selects one.
+# Set JZTREE_SKIP_JAX_CUDA_CHECK=1 when the backend's CUDA major differs from
+# the JAX build (D002 in docs/discrepancies.md).
+cuda12 = ["jztree-cu12>=1.1"]
+cuda13 = ["jztree-cu13>=1.1"]
+
+[project.urls]
+Homepage = "https://github.com/dforero0896/jzradius"
+Repository = "https://github.com/dforero0896/jzradius"
+Issues = "https://github.com/dforero0896/jzradius/issues"
 
 [tool.setuptools]
 packages = ["jzradius"]
+
+# Native artifacts are not package data: setup.py compiles them into a private
+# staging directory and copies only the fresh ones into the wheel, so a checkout
+# with locally built .so files cannot leak them into a release. The exclusion
+# also keeps a stale egg-info/SOURCES.txt from resurrecting them in an sdist.
+[tool.setuptools.exclude-package-data]
+jzradius = ["_libs/*.so", "_libs/*.dylib", "_libs/*.dll"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

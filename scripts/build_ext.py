@@ -11,7 +11,12 @@ CPU artifact is an exact behavioural mirror, not a different algorithm.
 
 Usage
 -----
-    python scripts/build_ext.py [--force] [--no-cuda]
+    python scripts/build_ext.py [--force] [--no-cuda] [--out DIR]
+
+``JAXLIB_INCLUDE`` points the compiler at the XLA FFI headers when ``jax`` is not
+importable in the building interpreter (the pip build hook uses it), ``CXX`` and
+``NVCC`` select the compilers, and ``JZRADIUS_CUDA_ARCH`` overrides the default
+``sm_80/86/89/90`` fat binary.
 
 The script is idempotent: it rebuilds only when a source file is newer than the
 artifact unless ``--force`` is given.
@@ -51,6 +56,11 @@ DEFAULT_ARCHES = ("sm_80", "sm_86", "sm_89", "sm_90")
 
 
 def jaxlib_include() -> str:
+    explicit = os.environ.get("JAXLIB_INCLUDE")
+    if explicit:
+        if not Path(explicit).is_dir():
+            raise SystemExit(f"JAXLIB_INCLUDE={explicit} is not a directory")
+        return explicit
     try:
         import jax  # noqa: F401
 
@@ -83,12 +93,12 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True, cwd=ROOT)
 
 
-def build_cpu(include: str, force: bool) -> Path:
-    artifact = OUT / "libjzradius_cpu.so"
+def build_cpu(include: str, force: bool, out: Path = OUT) -> Path:
+    artifact = out / "libjzradius_cpu.so"
     if not needs_build(artifact, force):
         print(f"up to date: {artifact}")
         return artifact
-    OUT.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     compiler = os.environ.get("CXX", "g++")
     cmd = [
         compiler,
@@ -133,8 +143,8 @@ def cuda_arches() -> tuple[str, ...]:
     return DEFAULT_ARCHES
 
 
-def build_cuda(include: str, force: bool) -> Path | None:
-    artifact = OUT / "libjzradius_cuda.so"
+def build_cuda(include: str, force: bool, out: Path = OUT) -> Path | None:
+    artifact = out / "libjzradius_cuda.so"
     if not needs_build(artifact, force):
         print(f"up to date: {artifact}")
         return artifact
@@ -142,7 +152,7 @@ def build_cuda(include: str, force: bool) -> Path | None:
     if nvcc is None:
         print("nvcc not found: skipping the CUDA artifact", file=sys.stderr)
         return None
-    OUT.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     cmd = [
         nvcc,
         "-O3",
@@ -169,14 +179,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-cuda", action="store_true")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=OUT,
+        help="directory for the built artifacts (default: jzradius/_libs)",
+    )
     args = parser.parse_args()
 
     include = jaxlib_include()
     print(f"jaxlib include: {include}")
-    cpu = build_cpu(include, args.force)
+    cpu = build_cpu(include, args.force, args.out)
     print(f"cpu artifact: {cpu}")
     if not args.no_cuda:
-        cuda = build_cuda(include, args.force)
+        cuda = build_cuda(include, args.force, args.out)
         print(f"cuda artifact: {cuda}")
     return 0
 

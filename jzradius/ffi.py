@@ -82,9 +82,13 @@ def _load(platform: str) -> ctypes.CDLL:
     path = _LIB_DIR / _LIB_NAMES[platform]
     if not path.exists():
         hint = (
-            "run `python scripts/build_ext.py`"
+            "rebuild them with `python scripts/build_ext.py` (from a source "
+            "checkout), or reinstall jzradius without JZRADIUS_SKIP_NATIVE=1; "
+            "the CUDA library additionally requires nvcc"
             if platform == "cpu"
-            else "run `python scripts/build_ext.py` on a machine with nvcc"
+            else "the CUDA library is built by `python scripts/build_ext.py` "
+            "on a machine with nvcc (JZRADIUS_BUILD_CUDA=1 when installing), "
+            "and it must match the installed JAX's CUDA major version"
         )
         raise FfiUnavailable(
             f"jzradius FFI library for platform {platform!r} not found at {path}; "

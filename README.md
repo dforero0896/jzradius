@@ -9,7 +9,8 @@ weights), using a dual-tree traversal instead of an O(N²) pair list.
 
 ## Status
 
-Pre-alpha. The full stack exists: periodic bounds, tree adapter, exact
+Beta. `v1.0.0` is the frozen correctness baseline; the `1.1.0.dev0` series adds
+the single device-side traversal op. The full stack exists: periodic bounds, tree adapter, exact
 dual-tree traversal, CUDA forward/backward kernels, typed XLA-FFI host
 launchers, build integration and the `custom_vjp` wrapper. The kernels run on
 device: the complete suite (293 passed, 1 skipped) passes on one A30, including forward
@@ -24,10 +25,21 @@ against an independent soft-histogram implementation and adjoint (pyfcfc,
 ## Install
 
 ```bash
+git clone git@github.com:dforero0896/jzradius.git
+cd jzradius
 python -m venv --system-site-packages .venv
-.venv/bin/python -m pip install -e .
-# GPU stack must match jztree's backend; see docs/environment_lock.md
+.venv/bin/python -m pip install -e .          # builds the CPU FFI library
+JZRADIUS_BUILD_CUDA=1 .venv/bin/python -m pip install -e .   # + CUDA library
 ```
+
+The pip build hook runs `scripts/build_ext.py`, so a wheel or sdist install
+builds the same kernels the tests use; `JZRADIUS_SKIP_NATIVE=1` installs the
+Python layer only (`FfiUnavailable` on the kernel entry point), and
+`JAXLIB_INCLUDE` points the build at the XLA FFI headers when `jax` is not
+importable at build time. The GPU stack must match jztree's backend (see
+`docs/environment_lock.md`); wheels are `py3-none-linux_x86_64` because they
+carry shared objects but link no Python ABI. Full matrix, verification snippet
+and packaging gaps: [`docs/installation.md`](docs/installation.md).
 
 ## Minimal usage
 

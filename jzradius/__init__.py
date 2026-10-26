@@ -1,9 +1,12 @@
 """jzradius: differentiable periodic radius histograms on GPU.
 
-The public entry point is :func:`radius_softmax_histogram`; it is added in the
-GPU milestone.  Pure-JAX building blocks (:mod:`jzradius.math`,
-:mod:`jzradius.reference`, :mod:`jzradius.bounds`), the tree adapter and the
-CPU reference traversal are usable now.
+The public entry point is :func:`radius_softmax_histogram`: a pair histogram of
+periodically wrapped separations with soft (softmax or Gaussian) bin weights,
+plus its analytic VJP, backed by typed XLA-FFI kernels.
+
+Also exported are the pure-JAX building blocks (:mod:`jzradius.math`,
+:mod:`jzradius.reference`, :mod:`jzradius.bounds`), the tree adapter and the CPU
+reference traversal, which are what the tests check the kernels against.
 """
 
 from __future__ import annotations
@@ -50,7 +53,7 @@ from .tree_adapter import (
     check_tree_invariants,
 )
 
-__version__ = "0.0.1"
+__version__ = "1.1.0.dev0"
 
 __all__ = [
     "ApproximateModeWarning",
